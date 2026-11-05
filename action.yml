@@ -1,0 +1,74 @@
+name: 'Faultline'
+description: 'Regression review for pull requests, run in your own GitHub Actions runner. Posts one comment and one check on each pull request.'
+author: 'Faultline'
+branding:
+  icon: 'shield'
+  color: 'purple'
+inputs:
+  license-token:
+    description: 'Faultline license token (the single onboarding secret; set via FAULTLINE_TOKEN).'
+    required: false
+  license-url:
+    description: 'Faultline license service base URL (FAULTLINE_LICENSE_URL).'
+    required: false
+  results-url:
+    description: 'Faultline results service base URL (FAULTLINE_RESULTS_URL).'
+    required: false
+  channel:
+    description: 'Engine bundle channel: stable (default) or canary.'
+    required: false
+    default: 'stable'
+  redaction:
+    description: 'Redaction level applied on the runner before egress: paths-only (default; no code snippets leave your infrastructure) or full (opt in to cited snippets in your hosted Faultline report). Setting full here is not sufficient on its own: your Faultline tenant record must also permit full, or the upload is refused at ingest (HTTP 422); ask us to enable it. The PR comment always keeps full snippets; this only affects the upload to Faultline.'
+    required: false
+    default: 'paths-only'
+  mode:
+    description: 'Run mode: analyze (default), index, or qa-verify.'
+    required: false
+    default: 'analyze'
+  fail-on:
+    description: 'Whether findings can fail the check: never (the default when unset) or execution. With never, findings never fail the check. With execution, the check also fails when a regression was confirmed by running tests: a test that passed at the base of the pull request and fails at its head, confirmed by a rerun, or the same result from a generated reproduction test. Findings not confirmed by running tests never fail the check, whatever their severity. That evidence comes only from differential-testing or repro-synthesis (both opt-in, and both also need the capability on your plan), so without one of them, execution has no effect. At every setting, the check fails when the run itself fails (an analysis step hit an error, or Faultline refused to run, for example because of an invalid license token or configuration), and a run that cannot certify its result shows a neutral check rather than a green one. Whether a failed check blocks merging depends on your repository''s branch protection rules. The check summary and pull request comment say which finding failed the check, or why the run could not certify. The older values off, high, and medium are still accepted for now and read as never, execution, and execution, with a deprecation note on the check and comment. When unset, your organization''s default from the Faultline portal applies (if one is set); an explicit value here, including never, always wins.'
+    required: false
+  inline-comments:
+    description: 'Also post verified findings as inline review comments anchored on the PR diff (default true). To limit noise: at most 5 per pull request (HIGH severity first), one batched review per run (a single notification), and only verified findings whose cited line is in the diff; no other finding goes inline, and comments are updated in place across pushes, never duplicated or re-created after a human resolves or deletes one. Every finding always remains in the summary comment; set false to keep that comment as the only surface.'
+    required: false
+    default: 'true'
+  intent-context:
+    description: 'Pass the pull request''s title and description to the engine as analysis context (default true). The engine runs on this runner and, when AI analysis runs, sends this text to Anthropic as part of the analysis. It is never uploaded to Faultline, never included in the results upload, and never shown in the comment or check summary. Set false to withhold it; the engine then derives what intent it can from the head commit messages. Env fallback: FAULTLINE_INTENT_CONTEXT.'
+    required: false
+    default: 'true'
+  org-index:
+    description: 'Org-level index participation (default true). In index mode, uploads a paths-and-symbols repo index (package names, exported symbol names, and package-import sites, never code) to Faultline; in analyze mode, fetches the cross-repo consumer catalog for the packages this repo exports. Set false for zero org-index calls in every mode. Env fallback: FAULTLINE_ORG_INDEX.'
+    required: false
+    default: 'true'
+  github-token:
+    description: 'GITHUB_TOKEN used to post the PR comment + check run.'
+    required: false
+    default: '${{ github.token }}'
+  differential-testing:
+    description: 'Opt in to differential test execution (default false; only the literal "true" enables it). Faultline runs the tests related to the change against both the base and head of the pull request inside your runner. A test that passes at base and fails at head, confirmed by a rerun, confirms the finding it relates to; these confirmed findings are what fail-on: execution fails the check on. Works in analyze and qa-verify modes. Uses qa-test-command when set, otherwise detects vitest, jest, or pytest. This input takes effect only when your plan also includes the capability; otherwise the run proceeds without it and says why. Faultline can never enable this remotely, and can always disable it.'
+    required: false
+    default: 'false'
+  repro-synthesis:
+    description: 'Opt in to repro synthesis (default false; only the literal "true" enables it). For a verified finding, Faultline has the AI write a small reproduction test and runs it on your runner at the base and head of the pull request. Generated code is scanned before it runs and refused if it uses anything on a known list of network, process-starting, code-loading, or destructive file operations; it then runs with network proxy settings removed and a time limit. This is a deny list, not a sandbox: it cannot catch everything, and there is no operating-system sandbox. Content in your repository can influence the generated code (prompt injection), which is the main risk. Takes effect only when your plan also has the repro-synthesis capability; without it the run proceeds unchanged and says why. Requires an Anthropic API key (runs without a key never generate or run tests). Faultline can never enable this remotely, and can always disable it.'
+    required: false
+    default: 'false'
+  qa-test-command:
+    description: 'qa-verify mode (and differential-testing): command run once per selected test file (e.g. "pnpm vitest run"). Never detected; unset = selected tests are reported not-run (differential mode may still detect vitest/jest/pytest per test).'
+    required: false
+  qa-build-command:
+    description: 'qa-verify mode: optional build/typecheck command run once at head.'
+    required: false
+  preview-url:
+    description: 'qa-verify mode: preview deploy URL for read-only GET probes. Unset = probes reported not-run.'
+    required: false
+  qa-probe-paths:
+    description: 'qa-verify mode: comma-separated paths probed on the preview URL (default "/").'
+    required: false
+  browser-qa:
+    description: 'qa-verify mode: opt in to agent-driven Browser QA: runs your app at preview-url in a real browser and reports verified facts on the affected flows. Requires preview-url (shared with the qa-verify probes), and the runner must have the Playwright Chromium binary installed (add a workflow step: npx playwright install --with-deps chromium). Informational: its findings never fail the check.'
+    required: false
+    default: 'false'
+runs:
+  using: 'node20'
+  main: 'dist/index.js'
