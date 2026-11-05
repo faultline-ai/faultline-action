@@ -23,9 +23,17 @@ inputs:
     required: false
     default: 'paths-only'
   mode:
-    description: 'Run mode: analyze (default), index, or qa-verify.'
+    description: 'Run mode: analyze (default), index, qa-verify, or backtest. backtest replays merged fix and revert commits from your repository''s history against the pull requests that introduced the problems they fixed, and reports which ones Faultline would have flagged. Start it manually (on: workflow_dispatch; other events are refused), with full git history (fetch-depth: 0 on actions/checkout). It uses your Anthropic API key under the backtest-budget-usd cap, and its report is shown in the job summary and a "Faultline backtest" check; it is not uploaded to Faultline. Availability depends on your plan.'
     required: false
     default: 'analyze'
+  backtest-since:
+    description: 'backtest mode: where the replayed window starts, as a number of months back (for example 3mo) or a date (for example 2026-01-31). Default 3mo. Env fallback: FAULTLINE_BACKTEST_SINCE.'
+    required: false
+    default: '3mo'
+  backtest-budget-usd:
+    description: 'backtest mode: the most the whole backtest may spend on AI analysis, in US dollars, charged to your Anthropic account (default 20; must be a positive number). The cap always applies. If your plan provides the AI credentials instead, the cap is at most 20. When it is reached, the remaining fixes are still replayed with deterministic analysis only, and the report says so. Env fallback: FAULTLINE_BACKTEST_BUDGET_USD.'
+    required: false
+    default: '20'
   fail-on:
     description: 'Whether findings can fail the check: never (the default when unset) or execution. With never, findings never fail the check. With execution, the check also fails when a regression was confirmed by running tests: a test that passed at the base of the pull request and fails at its head, confirmed by a rerun, or the same result from a generated reproduction test. Findings not confirmed by running tests never fail the check, whatever their severity. That evidence comes only from differential-testing or repro-synthesis (both opt-in, and both also need the capability on your plan), so without one of them, execution has no effect. At every setting, the check fails when the run itself fails (an analysis step hit an error, or Faultline refused to run, for example because of an invalid license token or configuration), and a run that cannot certify its result shows a neutral check rather than a green one. Whether a failed check blocks merging depends on your repository''s branch protection rules. The check summary and pull request comment say which finding failed the check, or why the run could not certify. The older values off, high, and medium are still accepted for now and read as never, execution, and execution, with a deprecation note on the check and comment. When unset, your organization''s default from the Faultline portal applies (if one is set); an explicit value here, including never, always wins.'
     required: false
@@ -42,7 +50,7 @@ inputs:
     required: false
     default: 'true'
   github-token:
-    description: 'GITHUB_TOKEN used to post the PR comment + check run.'
+    description: 'GITHUB_TOKEN used to post the PR comment + check run. In backtest mode it is also used to look up which pull request introduced each past fix.'
     required: false
     default: '${{ github.token }}'
   differential-testing:

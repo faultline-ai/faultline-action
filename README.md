@@ -51,15 +51,15 @@ jobs:
 
 - `FAULTLINE_TOKEN` (secret): your organization's license token, from the Faultline portal.
 - `ANTHROPIC_API_KEY` (secret, optional): enables AI analysis under your own Anthropic account.
-- `FAULTLINE_PINNED_KEYRING`: Faultline's public signing keys, written into the workflow file as a literal value. The engine download and Faultline's authorization are both checked against them. The App's setup pull request fills in the current value. If you set up by hand, copy the workflow from the "Add the workflow" step in the Faultline portal, which includes it. The same keys are published at `https://license.tryfaultline.com/.well-known/jwks.json`. When Faultline rotates its keys, the GitHub App opens a pull request that updates this line in `.github/workflows/faultline.yml`.
+- `FAULTLINE_PINNED_KEYRING`: Faultline's public signing keys, written into the workflow file as a literal value. The engine download and Faultline's authorization are both checked against them. The App's setup pull request fills in the current value. If you set up by hand, copy the workflow from the "Add the workflow" step in the Faultline portal, which includes it. The same keys are published at `https://license.tryfaultline.com/.well-known/jwks.json`. When Faultline rotates its keys, the GitHub App opens a pull request that updates this line in `.github/workflows/faultline.yml`, and in `.github/workflows/faultline-backtest.yml` if you have one.
 
-Pin to a release tag (`@v0.1.5`) or a commit SHA instead of `@v0` if you prefer exact versions.
+Pin to a release tag (`@v0.1.6`) or a commit SHA instead of `@v0` if you prefer exact versions.
 
 ## Inputs
 
 | Input | Default | Description |
 | --- | --- | --- |
-| `mode` | `analyze` | `analyze` reviews the pull request. `index` records package and symbol names for cross-repository analysis. `qa-verify` also runs your tests and checks a preview deployment. Availability depends on your plan. |
+| `mode` | `analyze` | `analyze` reviews the pull request. `index` records package and symbol names for cross-repository analysis. `qa-verify` also runs your tests and checks a preview deployment. `backtest` replays past fixes from your history; see [Backtesting past changes](#backtesting-past-changes). Availability depends on your plan. |
 | `redaction` | `paths-only` | `paths-only` uploads no code. `full` includes cited snippets in your hosted report, if your organization's policy allows it. |
 | `fail-on` | unset | Unset or `never`: findings never fail the check. `execution`: the check also fails when a regression was confirmed by actually running tests (requires `differential-testing` or `repro-synthesis`). At every setting, the check fails if the run itself fails; see [How results are reported](#how-results-are-reported). |
 | `inline-comments` | `true` | Also post verified findings as inline review comments, at most 5 per pull request. |
@@ -72,10 +72,64 @@ Pin to a release tag (`@v0.1.5`) or a commit SHA instead of `@v0` if you prefer 
 | `qa-build-command` | unset | `qa-verify` mode: an optional build or typecheck command. |
 | `preview-url` | unset | `qa-verify` mode: a preview deployment to probe. |
 | `qa-probe-paths` | `/` | `qa-verify` mode: comma-separated paths to probe on `preview-url`. |
+| `backtest-since` | `3mo` | `backtest` mode: where the replayed window starts, as months back (`3mo`) or a date (`2026-01-31`). |
+| `backtest-budget-usd` | `20` | `backtest` mode: the most the whole backtest may spend on AI analysis, in US dollars. Must be a positive number. The cap always applies. If your plan provides the AI credentials, it is at most `20`. |
 | `channel` | `stable` | Engine release channel: `stable` or `canary`. |
-| `github-token` | `${{ github.token }}` | Token used to post the comment and check. |
+| `github-token` | `${{ github.token }}` | Token used to post the comment and check. In `backtest` mode, also used to look up pull requests. |
 
 Your organization can set defaults and limits for some of these in the Faultline portal. Any setting that changes a run is stated on the check and the comment.
+
+## Backtesting past changes
+
+`backtest` mode tests Faultline against changes you have already made. It finds the merged fix and revert commits in a window of your history, works out which earlier pull request introduced each problem, and replays the analysis on the change that pull request merged. The report lists every fix it looked at and whether the replay flagged the change, and whether a finding pointed inside the lines that pull request changed.
+
+- You start it by hand, from the Actions tab (`on: workflow_dispatch`). It does not run on pull requests: a run started by any other event stops without replaying anything.
+- It needs your full git history: set `fetch-depth: 0` on `actions/checkout`. On a shallow checkout the run stops and says so, without replaying anything.
+- AI analysis uses your own Anthropic API key, and `backtest-budget-usd` caps what the whole backtest can spend. If your plan provides the AI credentials instead, the cap is at most $20 per backtest, and the report says so when your setting was lowered. When the cap is reached, the remaining fixes are still replayed with deterministic analysis only, and those entries are marked. Without a key, every entry runs deterministic-only and the run still completes.
+- The report appears in the job summary and in a check named `Faultline backtest` on the commit you ran it from. Nothing from the report is uploaded to Faultline. During the run, the engine reads pull request details from the GitHub API with `github-token`, and AI analysis calls go from your runner to Anthropic, as in a pull request review.
+- The check is neutral when any entry could not be replayed, when the budget cap was reached, or when the run had no AI analysis at all, and green otherwise. Findings never fail it, and `fail-on` does not apply. The check fails only when the run itself fails.
+- It uses the GitHub CLI (`gh`), which GitHub-hosted runners include. Self-hosted runners need it installed.
+- Availability depends on your plan. On a plan without it, Faultline refuses the run and the check fails with the reason.
+
+```yaml
+# .github/workflows/faultline-backtest.yml
+name: Faultline backtest
+on:
+  workflow_dispatch:
+    inputs:
+      since:
+        description: 'Window start: months back (3mo) or a date (2026-01-31)'
+        default: '3mo'
+      budget:
+        description: 'Most the backtest may spend on AI analysis, in US dollars'
+        default: '20'
+permissions:
+  contents: read        # read the repository and its history
+  id-token: write       # prove repository identity to Faultline
+  checks: write         # publish the Faultline backtest check
+  pull-requests: read   # find the pull request that introduced each fix
+  issues: read          # follow issue links from those pull requests
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history is required
+      - uses: faultline-ai/faultline-action@v0
+        with:
+          mode: backtest
+          backtest-since: ${{ inputs.since }}
+          backtest-budget-usd: ${{ inputs.budget }}
+        env:
+          FAULTLINE_TOKEN: ${{ secrets.FAULTLINE_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}   # optional
+          FAULTLINE_LICENSE_URL: https://license.tryfaultline.com
+          FAULTLINE_RESULTS_URL: https://api.tryfaultline.com
+          FAULTLINE_PINNED_KEYRING: '{"keys":[...]}'   # the same value as in .github/workflows/faultline.yml
+```
+
+Save it at exactly `.github/workflows/faultline-backtest.yml`, and copy `FAULTLINE_PINNED_KEYRING` from your pull request workflow. When Faultline rotates its keys, the GitHub App's update pull request changes the keyring line in this file too, as long as it is at that path.
 
 ## Code execution
 
