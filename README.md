@@ -2,7 +2,7 @@
 
 Faultline reviews every pull request for regressions: changes that could break existing behavior elsewhere in your codebase. This Action runs that review inside your own GitHub Actions runner and posts the result as one comment and one check on the pull request.
 
-Using this Action requires a Faultline account.
+Using this Action requires a Faultline account. The [quickstart](docs/quickstart.md) walks through setup, your first review, plans, and troubleshooting.
 
 ## How it works
 
@@ -15,7 +15,7 @@ This repository contains only the Action's client code. The analysis engine is d
 
 ## What leaves your runner
 
-By default (`redaction: paths-only`), no source code is uploaded. Findings identify code by file path, symbol name and line number, and every field that could quote code is removed on your runner before upload. As a second check, Faultline's servers refuse an upload whose findings include cited code or AI explanations, or whose report includes suggested fix or test code. Your pull request comment is rendered on your runner and always shows full code citations.
+By default (`redaction: paths-only`), no source code is uploaded. Findings identify code by file path, symbol name and line number, and every field that could quote code is removed on your runner before upload. As a second check, Faultline's servers refuse an upload whose findings include cited code or AI explanations, or whose report includes suggested fix or test code. Your pull request comment is rendered on your runner and always shows full code citations. After a later push, the Action also uploads, for each finding it showed earlier on the pull request, whether the lines that finding pointed at have changed since: a finding ID and a fixed outcome value, never file paths, line numbers or code. The file locations it compares against are kept in a hidden note inside its own pull request comment and are not uploaded.
 
 Setting `redaction: full` includes cited code snippets in your hosted report. Your organization's policy on our side must also allow `full`. If it does not, the upload is refused and the run has no hosted report; ask us to enable it.
 
@@ -53,7 +53,7 @@ jobs:
 - `ANTHROPIC_API_KEY` (secret, optional): enables AI analysis under your own Anthropic account.
 - `FAULTLINE_PINNED_KEYRING`: Faultline's public signing keys, written into the workflow file as a literal value. The engine download and Faultline's authorization are both checked against them. The App's setup pull request fills in the current value. If you set up by hand, copy the workflow from the "Add the workflow" step in the Faultline portal, which includes it. The same keys are published at `https://license.tryfaultline.com/.well-known/jwks.json`. When Faultline rotates its keys, the GitHub App opens a pull request that updates this line in `.github/workflows/faultline.yml`, and in `.github/workflows/faultline-backtest.yml` if you have one.
 
-Pin to a release tag (`@v0.1.6`) or a commit SHA instead of `@v0` if you prefer exact versions.
+Pin to a release tag (`@v0.1.7`) or a commit SHA instead of `@v0` if you prefer exact versions.
 
 ## Inputs
 
@@ -78,6 +78,35 @@ Pin to a release tag (`@v0.1.6`) or a commit SHA instead of `@v0` if you prefer 
 | `github-token` | `${{ github.token }}` | Token used to post the comment and check. In `backtest` mode, also used to look up pull requests. |
 
 Your organization can set defaults and limits for some of these in the Faultline portal. Any setting that changes a run is stated on the check and the comment.
+
+## Repository configuration file
+
+A repository can also add an optional `.faultline.yml` at its root. It has three settings and no others:
+
+```yaml
+# Paths left out of analysis. Nothing is reported on these files.
+ignore:
+  - "vendor/"
+  - "src/generated/**"
+  - "*.snap"
+
+# Plain-language context for the AI review. At most 2,000 characters.
+instructions: |
+  Removing v1 serializer fields under src/billing/legacy is intended.
+
+# Lowest severity posted on the pull request: low, medium, or high.
+min_severity: medium
+```
+
+- `ignore` takes path patterns relative to the repository root. `*` matches within one path segment, `**` matches any number of directories, a pattern with no slash matches at any depth, and a directory pattern covers everything inside it. Negation (`!pattern`) is not supported.
+- `instructions` is given to the AI review as context, next to the pull request's title and description, and is sent to Anthropic with the rest of the analysis. It can help the review recognize an intended change. It cannot create a finding, raise a finding's severity, or make a finding able to fail the check.
+- `min_severity` filters what is posted on the pull request. The default, `low`, posts everything. A regression confirmed by running tests is always posted.
+
+The file can only narrow what the inputs above allow; it cannot turn anything on, and the inputs and your organization's settings keep precedence. It is read from the pull request being reviewed. A mistake in it never fails the check: an unknown key is ignored with a warning in the check summary, and a file that is not valid is not applied at all, which the comment and the check summary both state. Without the file, nothing changes.
+
+If the check summary says the engine version in use does not read `.faultline.yml` yet, the file was not applied on that run; a later engine release will read it.
+
+The full reference, with the pattern rules, limits, and how the file relates to your other settings, is [docs/repo-config.md](docs/repo-config.md).
 
 ## Backtesting past changes
 
@@ -154,7 +183,7 @@ The runner needs outbound access to:
 - `license.tryfaultline.com` and `api.tryfaultline.com` (Faultline, including the engine download)
 - `api.anthropic.com` (only if you supply an API key)
 - `*.actions.githubusercontent.com` (GitHub's OIDC tokens), `api.github.com`, `github.com`
-- GitHub's Actions cache service (`results-receiver.actions.githubusercontent.com` and `*.blob.core.windows.net`), which GitHub-hosted runners reach by default. The Action caches the engine download and its last authorization there. If it is unreachable, runs still work, but cannot fall back on a cached authorization while Faultline's licensing service is unavailable.
+- GitHub's Actions cache service (`results-receiver.actions.githubusercontent.com` and `*.blob.core.windows.net`), which GitHub-hosted runners reach by default. The Action caches the engine download and its last authorization there. If it is unreachable, runs still work, but cannot fall back on a cached authorization while Faultline's licensing service is unavailable; the run summary says so in one line. GitHub keeps each pull request's cache separate, so that fallback covers a pull request for a few hours after its own last successful run. It covers new pull requests too only if the Action also runs on your default branch.
 - `huggingface.co` and its download CDN (`*.hf.co`), to download a small public model used for code-similarity analysis when it is not already on the runner. Nothing about your code is sent. If the download is blocked, a pull request review continues without that analysis; an `index` run fails. Air-gapped runners can provide the model files through `FAULTLINE_EMBEDDER_DIR` instead.
 
 ## Open-source software
